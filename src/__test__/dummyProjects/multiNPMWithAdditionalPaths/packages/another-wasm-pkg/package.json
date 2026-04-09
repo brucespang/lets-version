@@ -1,0 +1,5 @@
+{
+  "private": true,
+  "name": "another-wasm-pkg",
+  "version": "1.0.0"
+}

@@ -191,6 +191,7 @@ export class GitCommitWithConventionalAndPackageInfo extends GitCommitWithConven
 }
 
 export interface PackageInfoOpts {
+  additionalPaths?: string[];
   filesChanged?: string[];
   isPrivate: boolean;
   name: string;
@@ -202,6 +203,8 @@ export interface PackageInfoOpts {
 }
 
 export class PackageInfo {
+  additionalPaths: string[];
+  allPaths: string[];
   isPrivate: boolean;
   name: string;
   packageJSONPath: string;
@@ -211,7 +214,19 @@ export class PackageInfo {
   version: string;
   filesChanged?: string[];
 
-  constructor({ filesChanged, isPrivate, name, packageJSONPath, packagePath, pkg, root, version }: PackageInfoOpts) {
+  constructor({
+    additionalPaths,
+    filesChanged,
+    isPrivate,
+    name,
+    packageJSONPath,
+    packagePath,
+    pkg,
+    root,
+    version,
+  }: PackageInfoOpts) {
+    this.additionalPaths = additionalPaths ?? [];
+    this.allPaths = [packagePath, ...this.additionalPaths];
     this.isPrivate = isPrivate;
     this.name = name;
     this.packageJSONPath = packageJSONPath;

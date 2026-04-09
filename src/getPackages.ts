@@ -1,14 +1,35 @@
 import mapWorkspaces from '@npmcli/map-workspaces';
 import appRootPath from 'app-root-path';
 import { promises as fs } from 'fs';
+import fsSync from 'fs';
 import path from 'path';
 import { PackageJson } from 'type-fest';
 
 import { fixCWD } from './cwd.js';
 import { exec } from './exec.js';
 import { getPackageManager } from './getPackageManager.js';
+import { LetsVersionConfig, readLetsVersionConfig } from './readUserConfig.js';
 import { PackageInfo } from './types.js';
+import { isUnderPath } from './util.js';
 import { detectIfMonorepo } from './workspaces.js';
+
+/**
+ * Resolves and validates additionalPaths for a package.
+ * Paths are resolved relative to the package directory. Throws if any
+ * resolved path does not exist on disk.
+ */
+function resolveAdditionalPaths(packageName: string, packagePath: string, rawPaths: string[]): string[] {
+  return rawPaths.map(p => {
+    const resolved = path.resolve(packagePath, p);
+    if (!fsSync.existsSync(resolved)) {
+      throw new Error(
+        `additionalPaths entry "${p}" for package "${packageName}" resolved to "${resolved}" which does not exist. ` +
+          `Paths in letsVersion.config.mjs are resolved relative to the package directory ("${packagePath}").`,
+      );
+    }
+    return resolved;
+  });
+}
 
 /**
  * Tries to figure out what all packages live in repository.
@@ -17,9 +38,10 @@ import { detectIfMonorepo } from './workspaces.js';
  * We will leave the responsibilty of updating the "root" monorepo package
  * to the user. They can use this library, but it will be opt-in.
  */
-export async function getPackages(cwd = appRootPath.toString()) {
+export async function getPackages(cwd = appRootPath.toString(), config?: LetsVersionConfig | null) {
   const fixedCWD = fixCWD(cwd);
   const pm = await getPackageManager(fixedCWD);
+  const resolvedConfig = config ?? (await readLetsVersionConfig(fixedCWD));
 
   const rootPJSONPath = path.join(fixedCWD, 'package.json');
 
@@ -56,11 +78,21 @@ export async function getPackages(cwd = appRootPath.toString()) {
     });
   }
 
+  const rootPackagePath = path.dirname(rootPJSONPath);
+  const rootName = rootPJSON.name || '';
+  const rootPkgConfig = resolvedConfig?.packages?.[rootName];
+  const rootAdditionalPaths = resolveAdditionalPaths(
+    rootName,
+    rootPackagePath,
+    rootPkgConfig?.additionalPaths ?? [],
+  );
+
   const rootPackage = new PackageInfo({
+    additionalPaths: rootAdditionalPaths,
     isPrivate: rootPJSON.private || false,
-    name: rootPJSON.name || '',
+    name: rootName,
     packageJSONPath: rootPJSONPath,
-    packagePath: path.dirname(rootPJSONPath),
+    packagePath: rootPackagePath,
     pkg: rootPJSON,
     root: true,
     version: rootPJSON.version || '',
@@ -70,7 +102,11 @@ export async function getPackages(cwd = appRootPath.toString()) {
     Array.from(workspaces.entries()).map(async ([name, packagePath]) => {
       const pjson = JSON.parse(await fs.readFile(path.join(packagePath, 'package.json'), 'utf8')) as PackageJson;
 
+      const pkgConfig = resolvedConfig?.packages?.[name];
+      const additionalPaths = resolveAdditionalPaths(name, packagePath, pkgConfig?.additionalPaths ?? []);
+
       return new PackageInfo({
+        additionalPaths,
         isPrivate: pjson.private ?? false,
         name,
         packagePath,
@@ -101,8 +137,8 @@ export async function getAllPackagesChangedBasedOnFilesModified(
   const out = new Map<string, PackageInfo>();
 
   for (const filePath of filesModified) {
-    const touchedPackage = packagesToCheck.find(p => filePath.includes(p.packagePath));
-    if (touchedPackage) {
+    const touchedPackages = packagesToCheck.filter(p => p.allPaths.some(ap => isUnderPath(filePath, ap)));
+    for (const touchedPackage of touchedPackages) {
       const prevTrackedTouchedPackage = out.get(touchedPackage.name);
       const updatedPackage = new PackageInfo({
         ...touchedPackage,

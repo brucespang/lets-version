@@ -8,7 +8,7 @@ import { fixCWD } from './cwd.js';
 import { exec } from './exec.js';
 import { parseToConventional } from './parser.js';
 import { GitCommit, GitCommitWithConventionalAndPackageInfo, PackageInfo, PublishTagInfo } from './types.js';
-import { chunkArray } from './util.js';
+import { chunkArray, isUnderPath } from './util.js';
 
 let didFetchAll = false;
 /**
@@ -52,7 +52,7 @@ export interface GitCommitsSinceOpts {
   commitDateFormat?: string;
   cwd?: string;
   since?: string;
-  relPath?: string;
+  relPath?: string | string[];
 }
 /**
  * Returns commits since a particular git SHA or tag.
@@ -60,7 +60,7 @@ export interface GitCommitsSinceOpts {
  * from the dawn of man are returned
  */
 export async function gitCommitsSince(opts?: GitCommitsSinceOpts): Promise<GitCommit[]> {
-  const { cwd = appRootPath.toString(), commitDateFormat = 'iso-strict', relPath = '', since = '' } = opts ?? {};
+  const { cwd = appRootPath.toString(), commitDateFormat = 'iso-strict', relPath = [], since = '' } = opts ?? {};
   const fixedCWD = fixCWD(cwd);
 
   let cmd = 'git --no-pager log';
@@ -71,7 +71,10 @@ export async function gitCommitsSince(opts?: GitCommitsSinceOpts): Promise<GitCo
   cmd += ` --format=${DELIMITER}%H${DELIMITER}%an${DELIMITER}%ae${DELIMITER}%ad${DELIMITER}%B${LINE_DELIMITER}`;
   if (commitDateFormat) cmd += ` --date=${commitDateFormat}`;
   if (since) cmd += ` ${since}..`;
-  if (relPath) cmd += ` -- ${relPath}`;
+
+  const relPaths = Array.isArray(relPath) ? relPath : [relPath];
+  const nonEmptyPaths = relPaths.filter(Boolean);
+  if (nonEmptyPaths.length) cmd += ` -- ${nonEmptyPaths.map(p => `"${p}"`).join(' ')}`;
 
   const stdout = await exec(cmd, { cwd: fixedCWD, stdio: 'pipe' });
 
@@ -271,7 +274,7 @@ export async function getAllFilesChangedSinceTagInfos(
         // we'll guard just to silence the compiler
         if (!pkg) return results;
 
-        return results.filter(fp => fp.startsWith(pkg.packagePath));
+        return results.filter(fp => pkg.allPaths.some(p => isUnderPath(fp, p)));
       }),
     )
   ).flat();
@@ -293,7 +296,7 @@ export async function getAllFilesChangedSinceBranch(
 
   const results = filteredPackages
     .map(pkg => {
-      return allFiles.filter(fp => fp.startsWith(pkg.packagePath));
+      return allFiles.filter(fp => pkg.allPaths.some(p => isUnderPath(fp, p)));
     })
     .flat();
 
@@ -316,7 +319,7 @@ export async function gitConventionalForPackage(
 
   if (!noFetchAll) gitFetchAll(fixedCWD);
   const taginfo = await gitLastKnownPublishTagInfoForPackage(packageInfo, fixedCWD);
-  const relPackagePath = path.relative(cwd, packageInfo.packagePath);
+  const relPaths = packageInfo.allPaths.map(p => path.relative(cwd, p));
 
   // in a prior version of lets-version, we used to error out if there wasn't a previous publish at all,
   // which wasn't great, as it meant that you needed at least one publish to use this library in your repo.
@@ -325,7 +328,7 @@ export async function gitConventionalForPackage(
   const results = await gitCommitsSince({
     ...rest,
     cwd: fixedCWD,
-    relPath: relPackagePath,
+    relPath: relPaths,
     since: taginfo?.sha ?? undefined,
   });
   const conventional = parseToConventional(results);

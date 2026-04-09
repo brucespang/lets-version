@@ -58,6 +58,16 @@ export function isPackageJSONDependencyKeySupported(
 }
 
 /**
+ * Returns true if `filePath` is located inside `basePath`.
+ * Uses a trailing path separator to avoid false prefix matches
+ * (e.g. `/foo/bar-baz/file` should NOT match base `/foo/bar`).
+ */
+export function isUnderPath(filePath: string, basePath: string): boolean {
+  const normalized = basePath.endsWith(path.sep) ? basePath : basePath + path.sep;
+  return filePath.startsWith(normalized) || filePath === basePath;
+}
+
+/**
  * Left-indents content to a certain depth
  */
 export function indentStr(content: string, indentChar = ' ', depth = 0) {
