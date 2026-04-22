@@ -74,7 +74,14 @@ export async function gitCommitsSince(opts?: GitCommitsSinceOpts): Promise<GitCo
 
   const relPaths = Array.isArray(relPath) ? relPath : [relPath];
   const nonEmptyPaths = relPaths.filter(Boolean);
-  if (nonEmptyPaths.length) cmd += ` -- ${nonEmptyPaths.map(p => `"${p}"`).join(' ')}`;
+  // Pathspecs are passed unquoted because the local `exec` helper splits
+  // commands on whitespace via `command.split(/\s+/)` rather than parsing
+  // shell quoting. If we wrap each path in `"..."`, the literal quote chars
+  // end up in argv and git sees a pathspec like `"packages/foo"` which
+  // matches no files. Paths produced by `path.relative()` are safe to leave
+  // unquoted in practice; users who need whitespace in paths should fix the
+  // exec layer.
+  if (nonEmptyPaths.length) cmd += ` -- ${nonEmptyPaths.join(' ')}`;
 
   const stdout = await exec(cmd, { cwd: fixedCWD, stdio: 'pipe' });
 
@@ -233,6 +240,21 @@ export async function getLastKnownPublishTagInfoForAllPackages(
 }
 
 /**
+ * Returns the absolute path to the git repository's top-level directory.
+ * `git diff --name-only` always emits paths relative to the repo root,
+ * regardless of the cwd it was invoked from. When the npm/yarn/pnpm
+ * workspace root and the git repo root differ (e.g. a workspace nested
+ * inside a larger git repo), naively joining the output with `cwd` produces
+ * paths that don't exist on disk. This is essential for correct attribution
+ * when packages declare `additionalPaths` that live outside the workspace
+ * root.
+ */
+async function gitRepoTopLevel(cwd: string): Promise<string> {
+  const out = await exec('git rev-parse --show-toplevel', { cwd, stdio: 'pipe' });
+  return (out ?? '').trim();
+}
+
+/**
  * Given a specific git sha, finds all files that have been modified
  * since the sha and returns the absolute filepaths
  */
@@ -240,12 +262,15 @@ export async function gitAllFilesChangedSinceSha(sha: string, cwd = appRootPath.
   const fixedCWD = fixCWD(cwd);
 
   const stdout = await exec(`git --no-pager diff --name-only ${sha}..`, { cwd: fixedCWD, stdio: 'pipe' });
+  // Resolve git's repo-root-relative output against the actual git top-level,
+  // not `cwd`. See `gitRepoTopLevel` above.
+  const repoTop = await gitRepoTopLevel(fixedCWD);
   return (
     stdout
       ?.trim()
       .split(os.EOL)
       .filter(Boolean)
-      .map(fp => path.resolve(path.join(cwd, fp))) ?? []
+      .map(fp => path.resolve(repoTop, fp)) ?? []
   );
 }
 
